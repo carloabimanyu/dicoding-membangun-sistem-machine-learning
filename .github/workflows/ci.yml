@@ -1,0 +1,87 @@
+name: CI
+
+concurrency:
+    group: ci
+    cancel-in-progress: true
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - "workflow_ci/MLProject/**"
+            - "preprocessing/data_preprocessing/**"
+            - "pyproject.toml"
+            - "uv.lock"
+            - ".github/workflows/ci.yml"
+    # Push data dari bot Preprocessing tidak memicu workflow lain,
+    # jadi re-training dipicu saat workflow Preprocessing selesai.
+    workflow_run:
+        workflows: [Preprocessing]
+        types: [completed]
+        branches: [main]
+    workflow_dispatch:
+
+env:
+    MLPROJECT_DIR: workflow_ci/MLProject
+    ARTIFACT_DIR: workflow_ci/artifacts
+    IMAGE_NAME: smsl-breast-cancer
+    MLFLOW_DISABLE_AGENT_HINT: "1"
+
+jobs:
+    train:
+        runs-on: ubuntu-latest
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        permissions:
+            contents: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v7
+
+            - name: Set up uv
+              uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+              with:
+                enable-cache: true
+
+            - name: Install dependencies
+              run: uv sync --locked --no-dev
+
+            - name: Run MLflow Project
+              env:
+                MLFLOW_TRACKING_URI: sqlite:///${{ runner.temp }}/mlflow.db
+              run: uv run mlflow run "$MLPROJECT_DIR" --env-manager local --experiment-name ci
+
+            - name: Commit artifacts to repository
+              run: |
+                git config user.name "github-actions[bot]"
+                git config user.email "github-actions[bot]@users.noreply.github.com"
+                git add "$ARTIFACT_DIR"
+                if git diff --staged --quiet; then
+                  echo "No artifact changes"
+                  exit 0
+                fi
+                git commit -m "chore: update CI model artifacts"
+                git pull --rebase
+                git push
+
+            - name: Log in to Docker Hub
+              uses: docker/login-action@v4
+              with:
+                username: ${{ secrets.DOCKERHUB_USERNAME }}
+                password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+            - name: Build Docker image with MLflow
+              run: |
+                uv run mlflow models build-docker \
+                  --model-uri "$ARTIFACT_DIR/model" \
+                  --name "$IMAGE_NAME" \
+                  --env-manager uv
+
+            - name: Push Docker image to Docker Hub
+              env:
+                DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+              run: |
+                for tag in latest "${GITHUB_SHA::7}"; do
+                  docker tag "$IMAGE_NAME" "$DOCKERHUB_USERNAME/$IMAGE_NAME:$tag"
+                  docker push "$DOCKERHUB_USERNAME/$IMAGE_NAME:$tag"
+                done

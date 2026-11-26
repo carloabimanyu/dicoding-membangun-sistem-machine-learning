@@ -1,0 +1,11 @@
+name: smsl-breast-cancer
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - mlflow==3.18.0
+      - pandas==3.1.1
+      - scikit-learn==1.9.1
+      - matplotlib==3.11.2
