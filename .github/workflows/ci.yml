@@ -75,7 +75,7 @@ jobs:
                 uv run mlflow models build-docker \
                   --model-uri "$ARTIFACT_DIR/model" \
                   --name "$IMAGE_NAME" \
-                  --env-manager uv
+                  --env-manager local
 
             - name: Push Docker image to Docker Hub
               env:
